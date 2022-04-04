@@ -1,0 +1,820 @@
+---
+title: "NBA6921 Project Team8"
+author: "Yuanhong Cao, Annabelle Gu, Yihui Guo"
+date: "11/13/2021"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      comment = '', 
+                      warning = FALSE, 
+                      message = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+rm(list=ls())
+options(digits = 3, scipen = 999)
+library(tidyverse)
+library(ISLR)
+library(jtools)
+library(caret)
+library(ROCR)
+library(glmnet)
+library(ggcorrplot)
+library(cowplot)
+library(lmtest)
+library(corrr)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(e1071)
+library(MASS) 
+library(leaps)
+library(randomForest)
+library(rpart)
+library(ranger)
+library(gbm)
+set.seed(2)
+train <- read.csv("train.csv")
+
+```
+
+
+```{r}
+Score <- matrix(, nrow = 4, ncol = 1)
+rownames(Score) <- c("Linear Regression", "Random Forest", "Elastic Net", "Boosting")
+colnames(Score) <- c("RMSE")
+
+Score
+```
+
+
+```{r}
+train <- train[,!colnames(train) %in% c('Id','MSZoning','Street',
+                                        'Alley', 'LotShape', 'LandContour', 
+                                        'Utilities', 'LotConfig', 'LandSlope',
+                                        'Neighborhood', 'Condition1', 
+                                        'Condition2', 'BldgType', 'HouseStyle', 
+                                        'RoofStyle', 'RoofMatl', 'Exterior1st',
+                                        'Exterior2nd', 'MasVnrType', 
+                                        'ExterQual','ExterCond', 'Foundation',
+                                        'BsmtQual', 'BsmtCond', 'BsmtExposure', 
+                                        'BsmtFinType1', 'BsmtFinType2',
+                                        'Heating', 'HeatingQC', 'CentralAir', 
+                                        'Electrical', 'KitchenQual', 
+                                        'Functional', 'FireplaceQu', 
+                                        'GarageType', 'GarageFinish', 
+                                        'GarageQual', 'GarageCond', 
+                                        'PavedDrive', 'PoolQC' ,'Fence',
+                                        'MiscFeature', 'SaleType', 
+                                        'SaleCondition', 'MasVnrArea')]
+```
+
+
+
+```{r}
+colSums(is.na(train))
+```
+
+```{r}
+train$LotFrontage[is.na(train$LotFrontage)] <- median(train$LotFrontage,
+                                                      na.rm=TRUE)
+train$GarageYrBlt[is.na(train$GarageYrBlt)] <- median(train$GarageYrBlt,
+                                                      na.rm=TRUE)
+```
+
+```{r}
+colSums(is.na(train))
+```
+
+```{r}
+train_ind <- sample(1:nrow(train),4/5*nrow(train))
+house_train <- train[train_ind,]
+house_test <- train[-train_ind,]
+```
+
+# Variation
+
+```{r}
+range(house_train$SalePrice, na.rm = TRUE)
+```
+
+```{r}
+quantile(house_train$SalePrice, na.rm = TRUE)
+```
+
+```{r}
+quantile(house_train$SalePrice, 
+        probs = seq(from = 0, to = 1, by = .1),
+        na.rm = TRUE)
+```
+
+```{r}
+ggplot(data = house_train) +
+  geom_histogram(mapping = aes(x = SalePrice), binwidth = 15000)
+```
+```{r}
+minprice <- min(house_test$SalePrice)
+maxprice <- max(house_test$SalePrice)
+
+
+
+house_train$SalePrice = log(house_train$SalePrice)
+house_test$SalePrice = log(house_test$SalePrice)
+train$SalePrice = log(train$SalePrice)
+```
+
+```{r}
+str(house_train)
+```
+
+
+
+```{r}
+norm <- function(x) {
+   (x - mean(x)) / sd(x)
+}
+denorm <- function(x,minval,maxval) {
+    x*(maxval-minval) + minval
+}
+trainprice <- house_train$SalePrice
+testprice <- house_test$SalePrice
+totalprice <- train$SalePrice
+train <- as.data.frame(lapply(train[,1:35], norm))
+house_train <- as.data.frame(lapply(house_train[,1:35], norm))
+house_test <- as.data.frame(lapply(house_test[,1:35], norm))
+```
+
+```{r}
+house_train["SalePrice"] <- trainprice
+house_test["SalePrice"] <- testprice
+train["SalePrice"] <- totalprice
+```
+
+
+
+```{r}
+num_cols =  unlist(lapply(house_train, is.numeric))
+# Create the correlation matrix
+corr = cor(house_train[,num_cols])
+
+
+```
+
+```{r}
+ggcorrplot(corr,
+     type = "full",lab = FALSE,
+    legend.title = "Correlation Coefficient",
+    colors = c("#053061", "white", "#67001f"),
+    ggtheme = ggplot2::theme_void,
+    outline.col = "white")
+```
+```{r}
+# Get lower triangle of the correlation matrix
+  get_lower_tri<-function(corr){
+    corr[upper.tri(corr)] <- NA
+    return(corr)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(corr){
+    corr[lower.tri(corr)]<- NA
+    return(corr)
+  }
+
+  
+upper_tri <- get_upper_tri(corr)
+# Melt the correlation matrix
+library(reshape2)
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+# Heatmap
+library(ggplot2)
+ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+
+reorder_cormat <- function(corr){
+# Use correlation between variables as distance
+dd <- as.dist((1-corr)/2)
+hc <- hclust(dd)
+corr <-corr[hc$order, hc$order]
+}
+
+
+# Reorder the correlation matrix
+corr <- reorder_cormat(corr)
+upper_tri <- get_upper_tri(corr)
+# Melt the correlation matrix
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+# Create a ggheatmap
+ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+    name="Pearson\nCorrelation") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+# Print the heatmap
+print(ggheatmap)
+```
+
+
+```{r}
+#rank order for the cross-corr
+library(lares)
+
+corr_cross(house_train[,num_cols], # name of dataset
+  max_pvalue = 0.05, # display only significant correlations (at 5% level)
+  top = 10 # display top 10 couples of variables (by correlation coefficient)
+)
+```
+```{r}
+#focus on one variable vs the rest of all
+#looking at GarageCars since it appears to be the most correlated one
+#GarageCars is high correlated with GarageAreas therefore, we would adjust 
+#those variables in our model 
+corr_var(house_train[,num_cols], # name of dataset
+  GarageCars, # name of variable to focus on
+  top = 5 # display top 5 correlations
+)
+```
+```{r}
+corr_var(house_train[,num_cols], # name of dataset
+  GrLivArea, # name of variable to focus on
+  top = 5 # display top 5 correlations
+)
+```
+
+
+
+```{r}
+
+# Convert correlation matrix to data frame
+corr_df =   as_cordf(corr) %>%
+# Focus on the Salary variable
+  focus(SalePrice) %>%
+# Get the absolute value of the correlation 
+# coefficient
+  mutate(SalePrice = abs(SalePrice)) %>%
+# Sort variables by absolute value of correlation 
+# coefficient
+  arrange(SalePrice) %>%
+# Clean up headers
+  rename(`correlation with SalePrice` = term ) %>%
+  rename(corr_coef = SalePrice)
+corr_df
+  
+```
+
+
+```{r}
+# x = which(corr_df$corr_coef >= 0.5)
+x = corr_df[which(corr_df$corr_coef >= 0.5),]
+new_var = x['correlation with SalePrice']
+# new_var
+# house_train %>% 
+house_train <- house_train[,colnames(house_train) %in%
+                             c(new_var$`correlation with SalePrice`, 
+                               'SalePrice')]
+house_test <- house_test[,colnames(house_test) %in% 
+                           c(new_var$`correlation with SalePrice`, 
+                             'SalePrice')]
+# house_train = house_train %>% select(new_var)
+# house_test = house_test %>% select(new_var)
+```
+
+```{r}
+corr_df[which(corr_df$corr_coef >= 0.5),]
+```
+
+```{r}
+p1 <- ggplot(house_train,mapping = aes(x = TotRmsAbvGrd,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p2 <- ggplot(house_train,mapping = aes(x =YearRemodAdd,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p3 <- ggplot(house_train,mapping = aes(x =YearBuilt,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p4 <- ggplot(house_train,mapping = aes(x = FullBath,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p5 <- ggplot(house_train,mapping = aes(x =X1stFlrSF,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p6 <- ggplot(house_train,mapping = aes(x =TotalBsmtSF,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p7 <- ggplot(house_train,mapping = aes(x = GarageArea,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p8 <- ggplot(house_train,mapping = aes(x =GarageCars,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p9 <- ggplot(house_train,mapping = aes(x =GrLivArea,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+p10 <- ggplot(house_train,mapping = aes(x =OverallQual,y=SalePrice)) +
+      geom_point() +
+      geom_smooth(method = "lm", formula = y~x,
+                  se=FALSE,colour = "blue")
+plot_grid(p1,p2,p3, ncol = 3)
+plot_grid(p4,p5,p6, ncol = 3)  
+plot_grid(p7,p8,p9, ncol = 3)  
+plot_grid(p10, ncol = 3)  
+```
+
+
+
+
+
+# Linear Regression
+```{r}
+#build base model  
+lm1 <- lm(SalePrice~., data = house_train)
+summary(lm1)
+
+#check if there are any outliers 
+fit <- fitted(lm1)
+stud.res <- studres(lm1)
+stud.fit <- data.frame("fit"=fit,"stud.res"=stud.res)
+ggplot(stud.fit, mapping = aes(x=fit,y=stud.res))+
+geom_point()
+
+
+```
+```{r}
+#index1 <- which(stud.res > 5)
+index2 <- which(stud.res < -5)
+index <- index2
+index
+```
+
+
+```{r}
+
+summary(lm1)$sigma
+#summary(lm1)$r.squared
+
+#remove outliers 
+adformula <- formula(SalePrice~.)
+lm_no_outlier = lm(adformula, data = house_train[-index,])
+summary(lm_no_outlier)$sigma
+#summary(lm_no_outlier)$r.squared
+
+```
+
+
+```{r}
+#since FullBath & GarageArea & TotRmsAbvGrd 's pval is greater than 0.05, 
+#we dont think it is statistically significant,we run again with a smaller model
+
+lm2 <- lm(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd, data = house_train)
+summary(lm2)
+
+
+
+
+summary(lm2)$sigma
+summary(lm2)$r.squared
+
+#remove outliers 
+adformula <- formula(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd)
+lm2_no_outlier = lm(adformula, data = house_train[-index,])
+summary(lm2_no_outlier)$sigma
+summary(lm2_no_outlier)$r.squared
+#r^2 decreased to 0.761
+
+```
+
+
+```{r}
+#compare two linear regression model
+anova(lm2_no_outlier,lm_no_outlier)
+#Pval is smaller than 0.05, we chose lm2_no_outlier to perform our test 
+```
+
+
+```{r}
+#outlier
+house_train1 = house_train[-index,]
+
+#best subset selection 
+# Draw validation set
+house_validation_data = house_train1 %>% sample_frac(size = 0.3)
+# Create the remaining training set
+house_training_data = setdiff(house_train1, house_validation_data)
+
+nvars = 7
+
+regfit.best=regsubsets(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd,
+                       data=house_training_data,nvmax=nvars)
+best.sum <- summary(regfit.best)
+best.model <- which.max(best.sum$adjr2)
+best.model
+```
+```{r}
+coef(regfit.best,id=best.model)
+```
+```{r}
+validation.mat=model.matrix(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd,
+                            data=house_validation_data)
+val.errors = numeric(nvars)
+
+for(each in 1:nvars){
+  coefi = coef(regfit.best,id=each)
+  pred = validation.mat[,names(coefi)]%*%coefi
+  val.errors[each]=mean((house_validation_data$SalePrice - pred)^2)
+  sprintf("the val error is",val.errors[each])
+}
+best.subset.model = which.min(val.errors)
+best.subset.model
+```
+
+```{r}
+#train on our test data in order to determine the accuracy 
+best.fit=regsubsets(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd,
+                    data=house_train1,nvmax =7)
+coefi_final1<- coef(best.fit,best.subset.model)
+coefi_final1
+```
+
+```{r}
+#test data
+test.mat1=model.matrix(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd,
+                       data=house_test)
+
+pred_test_lm = test.mat1[,names(coefi_final1)]%*%coefi_final1
+
+
+```
+
+
+```{r}
+head(house_test$SalePrice)
+head(pred_test_lm)
+pred_test_lm_org = exp(pred_test_lm)
+
+```
+
+```{r}
+library(Metrics)
+#final lm model - accuracy 
+rmse(pred_test_lm,house_test$SalePrice)
+
+
+#save as score 
+Score["Linear Regression","RMSE"] = rmse(pred_test_lm,house_test$SalePrice)
+
+Score
+```
+
+
+# Random Forest 
+```{r}
+#build base model 
+rf <-randomForest(SalePrice ~., data=house_train)
+rf
+```
+
+```{r}
+plot(rf)
+```
+```{r}
+# number of trees with lowest MSE
+which.min(rf$mse)
+```
+
+```{r}
+# RMSE of this optimal random forest
+sqrt(rf$mse[which.min(rf$mse)])
+```
+
+```{r}
+#tuning parameter 
+house_tree_tune <- rpart(SalePrice ~ .,data = house_train,method="anova",
+                         maxdepth=7)
+house_tree_tune
+```
+
+```{r}
+# hyperparameter grid search
+hyper_grid <- expand.grid(
+  mtry = seq(5, 10, by = 1),
+  node_size = seq(4, 16, by = 2),
+  sample_size = c(.5, .6, .70, .80),
+  OOB_RMSE = 0
+)
+# total number of combinations
+nrow(hyper_grid)
+```
+
+```{r}
+for(i in 1:nrow(hyper_grid)) {
+  # train model
+  model <- ranger(
+  formula = SalePrice ~ .,
+  data = house_train,
+  num.trees = 348,
+  mtry = hyper_grid$mtry[i],
+  min.node.size = hyper_grid$node_size[i],
+  sample.fraction = hyper_grid$sample_size[i] )
+  # add OOB error to grid
+  hyper_grid$OOB_RMSE[i] <- sqrt(model$prediction.error)
+}
+```
+
+```{r}
+hyper_grid %>%
+arrange(OOB_RMSE) %>% head(10)
+```
+```{r}
+best.rf <- hyper_grid %>%
+  arrange(OOB_RMSE) %>%
+  head(1)
+best.rf
+```
+
+
+```{r}
+optimal_rf <- ranger(
+formula = SalePrice ~ .,
+data = house_train,
+num.trees = 348,
+mtry = best.rf$mtry,
+min.node.size = best.rf$node_size,
+sample.fraction = best.rf$sample_size,
+importance = 'impurity')
+```
+
+```{r}
+#make predictions on 
+predict_rf <- predict(optimal_rf, house_test)$predictions
+```
+
+```{r}
+#store them in Score 
+Score["Random Forest","RMSE"] = RMSE(predict_rf, house_test$SalePrice)
+
+Score
+
+```
+
+
+
+
+# Elastic net
+
+```{r}
+# Predictor variables
+x <- model.matrix(SalePrice~., house_train)[,-1]
+# Outcome variable
+y <- house_train$SalePrice
+```
+
+```{r}
+# Build the model using the training set
+set.seed(123)
+model <- train(
+  SalePrice ~., data = house_train, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+
+
+```
+```{r}
+coef(model$finalModel, model$bestTune$lambda)
+```
+
+```{r}
+# Make predictions on the test data
+x.test <- model.matrix(SalePrice ~., house_test)[,-1]
+predictions <- model %>% predict(x.test)
+
+```
+
+
+
+```{r}
+Score["Elastic Net","RMSE"] = RMSE(predictions, house_test$SalePrice)
+
+Score
+```
+
+
+
+
+
+# Boosting 
+- Basic GBM model
+
+```{r}
+hit_gbm <- gbm(
+  formula = SalePrice ~ .,
+  data = house_train,
+  distribution = "gaussian",# SSE loss function
+  n.trees = 1000,
+  shrinkage = 0.001, #learning rate
+  cv.folds = 10,
+  interaction.depth = 5 #depth of each tree
+)
+# find index for number trees with minimum CV error
+best <- which.min(hit_gbm$cv.error)
+# get MSE and compute RMSE
+sqrt(hit_gbm$cv.error[best])
+gbm.perf(hit_gbm, method = "cv")
+```
+```{r}
+hit_gbm <- gbm(
+  formula = SalePrice ~ .,
+  data = house_train,
+  distribution = "gaussian",# SSE loss function
+  n.trees = 10000,
+  shrinkage = 0.001, #learning rate
+  cv.folds = 10,
+  interaction.depth = 5 #depth of each tree
+)
+# find index for number trees with minimum CV error
+best <- which.min(hit_gbm$cv.error)
+# get MSE and compute RMSE
+sqrt(hit_gbm$cv.error[best])
+gbm.perf(hit_gbm, method = "cv")
+```
+
+```{r}
+pred.gbm.final <- predict.gbm(hit_gbm, n.trees=4000, newdata = house_test)
+rmse.gbm.final.rmse <- sqrt(mean((house_test$SalePrice -
+                          pred.gbm.final)^2))
+rmse.gbm.final.rmse 
+pred.gbm.final
+CV_RSq <- (cor(pred.gbm.final, house_test$SalePrice))^2
+CV_RSq
+```
+
+```{r}
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  shrinkage = c(.001, .1),
+  interaction.depth = c(1, 5),
+  n.minobsinnode = c(5, 10),
+  bag.fraction = c(.7, .8), 
+  optimal_trees = 0,               
+  min_RMSE = 0                     
+)
+
+# total number of combinations
+nrow(hyper_grid)
+```
+
+```{r}
+# grid search 
+for(i in 1:nrow(hyper_grid)) {
+   print(i)
+  # train model 
+  gbm.tune <- gbm(
+    formula = SalePrice ~ .,
+    distribution = "gaussian",
+    data = house_train,
+    n.trees = 4000,
+    interaction.depth = hyper_grid$interaction.depth[i],
+    shrinkage = hyper_grid$shrinkage[i],
+    n.minobsinnode = hyper_grid$n.minobsinnode[i],
+    bag.fraction = hyper_grid$bag.fraction[i],
+    cv.folds = 10)
+
+  # add min training error and trees to grid
+  hyper_grid$optimal_trees[i] <- which.min(gbm.tune$cv.error)
+  hyper_grid$min_RMSE[i] <- sqrt(min(gbm.tune$cv.error))
+}
+```
+***
+```{r}
+hyper_grid %>% 
+  arrange(min_RMSE) %>%
+  head(10)
+```
+
+
+
+```{r}
+best.model <- hyper_grid %>% 
+  arrange(min_RMSE) %>%
+  head(1)
+best.model
+```
+
+***
+- Let's re-run the GBM model with optimal hyper parameters
+
+```{r}
+hit_gbm.final <- gbm(
+  formula = SalePrice ~ .,
+  data = house_train,
+  distribution = "gaussian",
+  n.trees = 4000,
+  interaction.depth = best.model$interaction.depth,
+  shrinkage = best.model$shrinkage,
+  n.minobsinnode = best.model$n.minobsinnode,
+  bag.fraction = best.model$bag.fraction,
+  cv.folds = 10)
+# find index for number trees with minimum CV error
+best <- which.min(hit_gbm.final$cv.error)
+# get MSE and compute RMSE
+sqrt(hit_gbm.final$cv.error[best])
+```
+
+***
+- Make predictions on the test data
+
+```{r}
+pred.gbm.final <- predict.gbm(hit_gbm.final, n.trees=4000, newdata = house_test)
+rmse.gbm.final.rmse <- sqrt(mean((house_test$SalePrice -
+                          pred.gbm.final)^2))
+rmse.gbm.final.rmse 
+pred.gbm.final
+
+```
+
+
+
+
+```{r}
+#store them in Score 
+Score["Boosting","RMSE"] = RMSE(pred.gbm.final, house_test$SalePrice)
+Score
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+test <- read.csv("test.csv")
+test <- test[,!colnames(test) %in% c('Id','MSZoning','Street','Alley', 
+                                     'LotShape', 'LandContour', 'Utilities',
+                                     'LotConfig', 'LandSlope', 'Neighborhood',
+                                     'Condition1', 'Condition2', 'BldgType', 
+                                     'HouseStyle', 'RoofStyle', 'RoofMatl',
+                                     'Exterior1st', 'Exterior2nd', 'MasVnrType',
+                                     'ExterQual','ExterCond', 'Foundation',
+                                     'BsmtQual', 'BsmtCond', 'BsmtExposure',
+                                     'BsmtFinType1', 'BsmtFinType2', 'Heating', 
+                                     'HeatingQC', 'CentralAir', 'Electrical', 
+                                     'KitchenQual', 'Functional', 'FireplaceQu',
+                                     'GarageType', 'GarageFinish', 'GarageQual',
+                                     'GarageCond', 'PavedDrive', 'PoolQC' ,
+                                     'Fence', 'MiscFeature', 'SaleType', 
+                                     'SaleCondition', 'MasVnrArea')]
+
+
+
+```
+
+```{r}
+final.fit=regsubsets(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd,
+                    data=train[,-index],nvmax =7)
+final_model <- coef(final.fit,best.subset.model)
+final_model
+
+
+#test data
+final_test=model.matrix(SalePrice~.-FullBath-GarageArea-TotRmsAbvGrd,
+                       data=train[,-index])
+
+final_test_lm = final_test[,names(final_model)]%*%final_model
+
+```
+
+
